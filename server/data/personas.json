@@ -1,0 +1,22 @@
+[
+  {"id": "p_01", "name": "Sarah Chen", "role": "Senior Product Manager", "domain": "tech", "traits": ["analytical", "guarded about timelines", "uses corporate language"]},
+  {"id": "p_02", "name": "Marcus Webb", "role": "Engineering Director", "domain": "tech", "traits": ["technical", "diplomatic", "values precision"]},
+  {"id": "p_03", "name": "Priya Sharma", "role": "CFO", "domain": "finance", "traits": ["measured", "numbers-focused", "cautious with forecasts"]},
+  {"id": "p_04", "name": "James Holloway", "role": "Head of Sales", "domain": "sales", "traits": ["optimistic", "relationship-driven", "deflects on pipeline"]},
+  {"id": "p_05", "name": "Elena Vasquez", "role": "General Counsel", "domain": "legal", "traits": ["precise", "risk-averse", "avoids speculation"]},
+  {"id": "p_06", "name": "David Park", "role": "Head of Design", "domain": "product", "traits": ["creative", "empathetic", "indirect communicator"]},
+  {"id": "p_07", "name": "Rachel Torres", "role": "VP of Engineering", "domain": "tech", "traits": ["process-oriented", "team-protective", "careful with external info"]},
+  {"id": "p_08", "name": "Amir Hassan", "role": "Chief Strategy Officer", "domain": "strategy", "traits": ["visionary", "big-picture", "vague on specifics"]},
+  {"id": "p_09", "name": "Sophie Liu", "role": "Head of Talent Acquisition", "domain": "hr", "traits": ["people-focused", "positive framing", "careful on headcount topics"]},
+  {"id": "p_10", "name": "Tom Bradley", "role": "Lead SRE", "domain": "infrastructure", "traits": ["technical", "incident-averse", "underplays issues to non-engineers"]},
+  {"id": "p_11", "name": "Nadia Okonkwo", "role": "Data Science Lead", "domain": "analytics", "traits": ["precise", "methodology-focused", "cautious with numbers"]},
+  {"id": "p_12", "name": "Carlos Reyes", "role": "Account Executive", "domain": "sales", "traits": ["relationship-first", "optimistic on deals", "defensive about pricing"]},
+  {"id": "p_13", "name": "Lisa Kim", "role": "Marketing Director", "domain": "marketing", "traits": ["narrative-focused", "brand-protective", "glosses over negatives"]},
+  {"id": "p_14", "name": "Ben Whitmore", "role": "Principal Architect", "domain": "tech", "traits": ["systems thinker", "long-horizon planner", "frank about tech debt"]},
+  {"id": "p_15", "name": "Anya Petrova", "role": "Head of Growth", "domain": "product", "traits": ["metrics-obsessed", "startup mindset", "protective about internal data"]},
+  {"id": "p_16", "name": "Jackson Yee", "role": "Operations Manager", "domain": "ops", "traits": ["process-driven", "risk-aware", "careful with operational details"]},
+  {"id": "p_17", "name": "Diana Osei", "role": "Chief of Staff", "domain": "exec", "traits": ["discreet", "context-aware", "skilled at deflection"]},
+  {"id": "p_18", "name": "Raj Mehta", "role": "ML Research Lead", "domain": "research", "traits": ["academically precise", "hedges claims", "protective of research"]},
+  {"id": "p_19", "name": "Nina Strand", "role": "Customer Success Manager", "domain": "cs", "traits": ["client-protective", "relationship-oriented", "optimistic on retention"]},
+  {"id": "p_20", "name": "Owen Fletcher", "role": "VP of Partnerships", "domain": "business", "traits": ["deal-oriented", "strategic", "vague about deal terms"]}
+]

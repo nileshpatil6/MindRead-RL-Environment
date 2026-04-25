@@ -1,0 +1,169 @@
+name: mindread-env
+version: "1.0.0"
+description: >
+  Interactive Theory of Mind training environment. An LLM agent (Detective)
+  must infer a hidden mental state by asking strategic questions to an Oracle.
+  Trains functional theory of mind — the ability to adapt questioning strategy
+  based on Oracle responses. First OpenEnv environment for second-order ToM training.
+  Cited research: "Theory of Mind Benchmarks are Broken for Large Language Models" (ICML 2025).
+
+server:
+  host: "0.0.0.0"
+  port: 7860
+  health_endpoint: "/health"
+
+endpoints:
+  reset:
+    method: POST
+    path: /reset
+    description: Start a new episode. Returns MindReadObservation with context and Oracle persona.
+    request:
+      task_id: str
+      secret_id: str  # optional — omit for random secret
+    response: MindReadObservation
+
+  step:
+    method: POST
+    path: /step
+    description: Ask the Oracle a question. Returns Oracle's response and updated observation.
+    request:
+      episode_id: str
+      action:
+        action: "ask_question"
+        question: str
+    response: StepResult
+
+  submit:
+    method: POST
+    path: /submit
+    description: Submit the Detective's final hypothesis. Returns reward with breakdown.
+    request:
+      episode_id: str
+      hypothesis: str
+      category_prediction: str  # optional: factual|belief|goal|second_order
+    response: SubmitResult
+
+  state:
+    method: GET
+    path: /state/{episode_id}
+    description: Get current observation for an active episode.
+
+  tasks:
+    method: GET
+    path: /tasks
+    description: List all 5 tasks with metadata.
+
+  generate_secret:
+    method: POST
+    path: /generate_secret
+    description: Dynamically generate a new secret and start an episode.
+    request:
+      category: str  # factual|belief|goal|second_order
+      difficulty: float  # 0.0 to 1.0
+      domain: str  # e.g. "tech startup"
+
+tasks:
+  - id: factual_easy
+    description: >
+      Infer a hidden factual workplace secret — an event, decision, or fact
+      the Oracle knows but hasn't publicly announced. Suitable for initial training.
+    max_steps: 8
+    reward_range: [0.0, 1.0]
+    difficulty: easy
+    category: factual
+    baseline_reward: 0.42
+    expected_trained_reward: 0.65
+
+  - id: factual_hard
+    description: >
+      Infer a precise numerical or date-bound secret. Requires specific inference
+      (exact figures, dates, percentages) — not just general direction.
+    max_steps: 6
+    reward_range: [0.0, 1.0]
+    difficulty: hard
+    category: factual
+    baseline_reward: 0.21
+    expected_trained_reward: 0.44
+
+  - id: belief_inference
+    description: >
+      Infer what the Oracle believes about another person's internal state —
+      their emotions, intentions, or unspoken plans. First-order Theory of Mind.
+    max_steps: 8
+    reward_range: [0.0, 1.0]
+    difficulty: medium
+    category: belief
+    baseline_reward: 0.33
+    expected_trained_reward: 0.52
+
+  - id: goal_inference
+    description: >
+      Infer the Oracle's hidden personal or professional ambition that they
+      haven't disclosed to colleagues or management.
+    max_steps: 8
+    reward_range: [0.0, 1.0]
+    difficulty: medium
+    category: goal
+    baseline_reward: 0.29
+    expected_trained_reward: 0.48
+
+  - id: second_order
+    description: >
+      Infer a recursive belief: what the Oracle believes that ANOTHER PERSON
+      believes or thinks. Second-order Theory of Mind — "I think that you think that..."
+      The hardest task and the primary research contribution of this environment.
+    max_steps: 10
+    reward_range: [0.0, 1.0]
+    difficulty: hard
+    category: second_order
+    baseline_reward: 0.14
+    expected_trained_reward: 0.38
+
+reward:
+  type: continuous
+  range: [0.0, 1.0]
+  components:
+    - name: semantic_similarity
+      weight: primary
+      description: Cosine similarity of sentence embeddings (all-MiniLM-L6-v2), normalized to [0,1]
+    - name: efficiency_bonus
+      weight: 0.4
+      description: Fewer questions asked = higher bonus (range 0.6-1.0)
+    - name: category_bonus
+      weight: 0.1
+      description: Bonus for correctly classifying the secret category
+    - name: keyword_bonus
+      weight: 0.1
+      description: Bonus for including key concepts in the hypothesis
+
+observation_space:
+  episode_id: str
+  task_id: str
+  step: int
+  max_steps: int
+  context: str
+  oracle_persona: str
+  conversation_history: list
+  questions_remaining: int
+  task_description: str
+
+action_space:
+  - type: ask_question
+    fields:
+      question: str
+  - type: submit_hypothesis
+    fields:
+      hypothesis: str
+      category_prediction: str  # optional
+
+research:
+  paper: "Theory of Mind Benchmarks are Broken for Large Language Models (ICML 2025)"
+  quote: >
+    "Achieving functional theory of mind over long interaction horizons with a
+    partner is a significant challenge deserving a prominent role in any
+    meaningful LLM evaluation."
+  contribution: >
+    MindRead is the first OpenEnv environment designed to train and measure
+    functional Theory of Mind — the ability to adapt behavior to infer what
+    someone actually knows or believes through interaction, not just predict
+    static mental state outcomes.
