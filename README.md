@@ -1,6 +1,6 @@
 # MindRead: Theory of Mind RL Environment
 
-[![HF Space](https://img.shields.io/badge/🤗-Live%20Demo-blue)](https://huggingface.co/spaces/shankarpatil8497/mindread-env)
+[![HF Space](https://img.shields.io/badge/🤗-Live%20Demo-blue)](https://huggingface.co/spaces/Mr66/mindread-env)
 
 **The first OpenEnv environment that trains LLM agents to infer hidden mental states through strategic questioning — functional Theory of Mind.**
 
