@@ -24,7 +24,7 @@ from trl import GRPOConfig, GRPOTrainer
 from training.mindread_grpo_env import MindReadGRPOEnv, DETECTIVE_SYSTEM, DETECTIVE_USER_TEMPLATE
 
 MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
-ENV_URL = "http://localhost:7860"
+ENV_URL = "http://localhost:8000"
 
 TASK_IDS = ["factual_easy", "factual_hard", "belief_inference", "goal_inference", "second_order"]
 

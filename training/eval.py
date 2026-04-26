@@ -15,18 +15,23 @@ from pathlib import Path
 from datetime import datetime
 
 import httpx
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 from training.mindread_grpo_env import MindReadGRPOEnv
 
 TASK_IDS = ["factual_easy", "factual_hard", "belief_inference", "goal_inference", "second_order"]
-ENV_URL = "http://localhost:7860"
+ENV_URL = "http://localhost:8000"
 
 
 def run_llm_detective(obs: dict, env: MindReadGRPOEnv, openai_model: str = "gpt-4o-mini") -> tuple[float, int]:
-    import openai
+    import os
     import re
+    from groq import Groq
 
-    client = openai.OpenAI()
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    groq_model = "llama-3.1-8b-instant"
 
     system = f"""\
 You are a Detective. Infer the Oracle's hidden secret by asking strategic questions.
@@ -47,7 +52,7 @@ SUBMIT: Category: <factual|belief|goal|second_order>
 
     for _ in range(max_q):
         resp = client.chat.completions.create(
-            model=openai_model,
+            model=groq_model,
             messages=messages,
             temperature=0.7,
             max_tokens=200,

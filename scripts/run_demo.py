@@ -13,9 +13,12 @@ import httpx
 import os
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
 # allow running from project root
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 from rich.console import Console
 from rich.panel import Panel
@@ -25,7 +28,7 @@ from rich import box
 
 console = Console()
 
-ENV_URL = "http://localhost:7860"
+ENV_URL = "http://localhost:8000"
 
 
 def detective_think_and_ask(
