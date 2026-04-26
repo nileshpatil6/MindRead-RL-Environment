@@ -1,263 +1,306 @@
 """
 MindRead HF Space — interactive Theory of Mind detective game.
-No API keys needed. Mock oracle gives evasive but truthful-sounding responses.
+
+Architecture:
+  - FastAPI OpenEnv server runs in a background thread (real /reset /step /submit endpoints)
+  - Gradio UI calls those endpoints via httpx — exactly how RL agents interface with OpenEnv
+  - Oracle is patched via LOCAL_ORACLE_FN (no Groq API key needed)
+  - Reward uses sentence-transformers on PyTorch (all-MiniLM-L6-v2)
+  - PyTorch is used for both the oracle mock model AND the embedding reward model
 """
 import json
 import random
-import re
+import threading
+import time
+import httpx
 import gradio as gr
-from pathlib import Path
-from sentence_transformers import SentenceTransformer
 
 # ---------------------------------------------------------------------------
-# Load secrets dataset
+# 1. Patch oracle BEFORE importing anything that starts the server
 # ---------------------------------------------------------------------------
-DATA_DIR = Path(__file__).parent / "server" / "data"
-with open(DATA_DIR / "secrets.json") as f:
-    ALL_SECRETS = json.load(f)
+import server.oracle as oracle_module
 
-TASK_SECRETS = {t: [s for s in ALL_SECRETS if s["task_id"] == t] for t in
-                ["factual_easy", "factual_hard", "belief_inference", "goal_inference", "second_order"]}
+EVASIVE = [
+    "That's an interesting angle — I'm not really in a position to say much about that right now.",
+    "I'd rather not get into specifics. It's a bit sensitive at the moment.",
+    "There's definitely some complexity there I can't go into detail about.",
+    "Let's just say things are evolving. I'll leave it at that.",
+    "You might want to read between the lines on that one.",
+    "Some news will surprise people soon — I just can't say when.",
+    "Things aren't quite as stable as they might appear from the outside.",
+    "I've been told to keep that close to my chest, honestly.",
+]
 
-TASK_DESCRIPTIONS = {
-    "factual_easy": "Infer a hidden workplace fact (easy)",
-    "factual_hard": "Infer a precise hidden number or date (hard)",
-    "belief_inference": "Infer what the Oracle believes about someone else",
-    "goal_inference": "Infer the Oracle's hidden career ambition",
-    "second_order": "Infer a belief-about-a-belief (recursive ToM — hardest)",
+def _mock_oracle(secret, conversation_history, question):
+    q = question.lower()
+    keywords = secret.hint_keywords
+    red_herrings = secret.red_herrings
+
+    if any(kw.lower() in q for kw in keywords):
+        return ("There's more going on there than I can share right now. "
+                "Let's just say it's on people's radar.")
+    for rh in red_herrings:
+        if any(w in q for w in rh.lower().split()[:3]):
+            return f"Oh, that? Yeah — {rh.lower().rstrip('.')}. Pretty interesting times."
+    return random.choice(EVASIVE)
+
+oracle_module.LOCAL_ORACLE_FN = _mock_oracle
+
+# ---------------------------------------------------------------------------
+# 2. Start the OpenEnv FastAPI server in a background thread
+# ---------------------------------------------------------------------------
+_server_ready = threading.Event()
+
+def _run_server():
+    import uvicorn
+    uvicorn.run("server.main:app", host="0.0.0.0", port=7861, log_level="error")
+
+threading.Thread(target=_run_server, daemon=True).start()
+
+# Wait for server to come up (max 30s)
+for _ in range(30):
+    try:
+        r = httpx.get("http://localhost:7861/health", timeout=2)
+        if r.status_code == 200:
+            _server_ready.set()
+            break
+    except Exception:
+        pass
+    time.sleep(1)
+
+BASE_URL = "http://localhost:7861"
+client = httpx.Client(base_url=BASE_URL, timeout=30)
+
+# ---------------------------------------------------------------------------
+# 3. Task config (mirrors openenv.yaml)
+# ---------------------------------------------------------------------------
+TASK_LABELS = {
+    "factual_easy":     "Factual — Easy   (8 questions)",
+    "factual_hard":     "Factual — Hard   (6 questions, need precision)",
+    "belief_inference": "Belief Inference (8 questions, 1st-order ToM)",
+    "goal_inference":   "Goal Inference   (8 questions)",
+    "second_order":     "Second-Order ToM (10 questions — hardest)",
 }
 
-MAX_QUESTIONS = {"factual_easy": 8, "factual_hard": 6,
-                 "belief_inference": 8, "goal_inference": 8, "second_order": 10}
+CATEGORY_CHOICES = ["factual", "belief", "goal", "second_order"]
 
 # ---------------------------------------------------------------------------
-# Reward model
+# 4. Gradio event handlers — all talk to OpenEnv via httpx
 # ---------------------------------------------------------------------------
-embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+def start_game(task_id):
+    if not _server_ready.is_set():
+        return {}, "Server not ready yet — please wait a moment and try again.", "", "", ""
+    obs = client.post("/reset", json={"task_id": task_id}).json()
+    ctx = (
+        f"**You are:** Detective\n\n"
+        f"**Oracle persona:** {obs['oracle_persona']}\n\n"
+        f"**Scene:** {obs['context']}\n\n"
+        f"**Your mission:** {obs['task_description']}\n\n"
+        f"**Questions remaining:** {obs['questions_remaining']} / {obs['max_steps']}"
+    )
+    state = {"obs": obs, "done": False, "history_md": ""}
+    return state, ctx, "", "", ""
 
-def compute_reward(hypothesis: str, secret_content: str, questions_used: int, max_q: int) -> dict:
-    from numpy import dot
-    from numpy.linalg import norm
-    e1 = embedder.encode(hypothesis)
-    e2 = embedder.encode(secret_content)
-    sim = float(dot(e1, e2) / (norm(e1) * norm(e2)))
-    sim_norm = max(0.0, (sim + 1) / 2)
-    efficiency = 0.6 + 0.4 * (1 - questions_used / max_q)
-    reward = min(1.0, sim_norm * efficiency)
-    return {"reward": round(reward, 3), "semantic": round(sim_norm, 3),
-            "efficiency": round(efficiency, 3), "questions": questions_used}
-
-# ---------------------------------------------------------------------------
-# Mock oracle — evasive but contextually aware
-# ---------------------------------------------------------------------------
-EVASIVE_TEMPLATES = [
-    "That's an interesting angle. I'm not really in a position to say much about that right now.",
-    "I'd rather not get into specifics — it's a bit sensitive at the moment.",
-    "There's definitely some complexity there that I can't go into detail about.",
-    "Let's just say things are… evolving. I'll leave it at that.",
-    "I appreciate the curiosity, but some things are better left unsaid for now.",
-    "You might want to read between the lines on that one.",
-    "I've been told to keep that close to my chest, honestly.",
-    "There's more going on than meets the eye, but I can't elaborate.",
-]
-
-HINT_TEMPLATES = [
-    "Things aren't quite as stable as they might appear from the outside.",
-    "Some news that will surprise people is coming — I just can't say when.",
-    "The situation is more fluid than the official line suggests.",
-]
-
-def mock_oracle_response(question: str, secret: dict, step: int) -> str:
-    q_lower = question.lower()
-    keywords = secret.get("hint_keywords", [])
-    red_herrings = secret.get("red_herrings", [])
-
-    # If question directly contains a hint keyword, give a slightly revealing evasive answer
-    if any(kw.lower() in q_lower for kw in keywords):
-        return random.choice(HINT_TEMPLATES) + " " + random.choice(EVASIVE_TEMPLATES[:3])
-
-    # If question mentions a red herring topic, engage with the red herring
-    if red_herrings and any(any(w in q_lower for w in rh.lower().split()[:3]) for rh in red_herrings):
-        rh = random.choice(red_herrings)
-        return f"Oh, {rh.lower().rstrip('.')}? Yeah, that's been making waves. Pretty exciting stuff actually."
-
-    # Default evasive response
-    return random.choice(EVASIVE_TEMPLATES)
-
-# ---------------------------------------------------------------------------
-# Gradio state helpers
-# ---------------------------------------------------------------------------
-def new_episode(task_id: str):
-    secrets = TASK_SECRETS.get(task_id, TASK_SECRETS["factual_easy"])
-    secret = random.choice(secrets)
-    return {
-        "secret": secret,
-        "task_id": task_id,
-        "history": [],
-        "step": 0,
-        "max_q": MAX_QUESTIONS[task_id],
-        "done": False,
-    }
-
-def format_history(history):
-    lines = []
-    for turn in history:
-        lines.append(f"**You:** {turn['q']}")
-        lines.append(f"**Oracle:** {turn['a']}")
-        lines.append("")
-    return "\n".join(lines) if lines else "_No questions asked yet._"
-
-def format_context(state):
-    s = state["secret"]
-    remaining = state["max_q"] - state["step"]
-    return (f"**Role:** {s['persona']}\n\n"
-            f"**Setting:** {s['context']}\n\n"
-            f"**Task:** {TASK_DESCRIPTIONS[state['task_id']]}\n\n"
-            f"**Questions remaining:** {remaining}/{state['max_q']}")
-
-# ---------------------------------------------------------------------------
-# Gradio event handlers
-# ---------------------------------------------------------------------------
-def start_game(task_id, state):
-    state = new_episode(task_id)
-    ctx = format_context(state)
-    return state, ctx, format_history([]), "", "", gr.update(interactive=True), gr.update(interactive=True), gr.update(interactive=False)
 
 def ask_question(question, state):
-    if not question.strip():
-        return state, format_history(state["history"]), "", "Please type a question first."
+    if not state:
+        return state, "_Start a new game first._", "", "Click 'New Game' first."
     if state.get("done"):
-        return state, format_history(state["history"]), "", "Episode finished. Start a new game."
-    if state["step"] >= state["max_q"]:
-        return state, format_history(state["history"]), "", "No questions remaining. Submit your hypothesis!"
+        return state, state["history_md"], "", "Episode finished. Start a new game."
+    if not question.strip():
+        return state, state["history_md"], "", "Type a question first."
 
-    answer = mock_oracle_response(question, state["secret"], state["step"])
-    state["history"].append({"q": question, "a": answer})
-    state["step"] += 1
+    obs = state["obs"]
+    resp = client.post("/step", json={
+        "episode_id": obs["episode_id"],
+        "action": {"action": "ask_question", "question": question.strip()}
+    }).json()
 
-    ctx = format_context(state)
-    hist = format_history(state["history"])
-    remaining = state["max_q"] - state["step"]
-    note = f"({remaining} questions left)" if remaining > 0 else "No questions left — submit your hypothesis!"
+    oracle_reply = resp["info"].get("oracle_response", "...")
+    new_obs = resp["observation"]
+
+    # Append to conversation markdown
+    hist = state["history_md"]
+    hist += f"\n**You:** {question.strip()}\n\n**Oracle:** {oracle_reply}\n\n---\n"
+
+    ctx = (
+        f"**You are:** Detective\n\n"
+        f"**Oracle persona:** {new_obs['oracle_persona']}\n\n"
+        f"**Scene:** {new_obs['context']}\n\n"
+        f"**Your mission:** {new_obs['task_description']}\n\n"
+        f"**Questions remaining:** {new_obs['questions_remaining']} / {new_obs['max_steps']}"
+    )
+    state = {**state, "obs": new_obs, "history_md": hist}
+
+    note = ""
+    if new_obs["questions_remaining"] == 0:
+        note = "No questions left — submit your hypothesis now!"
     return state, hist, ctx, note
 
-def submit_hypothesis(hypothesis, state):
-    if not hypothesis.strip():
-        return state, "Please enter your hypothesis first.", ""
+
+def submit_hypothesis(hypothesis, category, state):
+    if not state:
+        return state, "Start a new game first.", ""
     if state.get("done"):
         return state, "Episode already finished.", ""
+    if not hypothesis.strip():
+        return state, "Enter your hypothesis first.", ""
 
-    result = compute_reward(hypothesis, state["secret"]["content"], state["step"], state["max_q"])
-    state["done"] = True
+    obs = state["obs"]
+    resp = client.post("/submit", json={
+        "episode_id": obs["episode_id"],
+        "hypothesis": hypothesis.strip(),
+        "category_prediction": category,
+    }).json()
 
-    score_bar = "█" * int(result["reward"] * 20) + "░" * (20 - int(result["reward"] * 20))
-    verdict = "Excellent!" if result["reward"] > 0.6 else "Good attempt!" if result["reward"] > 0.3 else "Keep practicing!"
+    r = resp["reward"]
+    bd = resp["breakdown"]
+    true_secret = resp["true_secret"]
 
-    output = (
+    bar = "█" * int(r * 20) + "░" * (20 - int(r * 20))
+    verdict = "Excellent!" if r > 0.6 else "Good try!" if r > 0.35 else "Keep practicing!"
+
+    result_md = (
         f"## {verdict}\n\n"
-        f"**Score:** [{score_bar}] {result['reward']:.3f} / 1.000\n\n"
-        f"| Metric | Value |\n|--------|-------|\n"
-        f"| Semantic similarity | {result['semantic']:.3f} |\n"
-        f"| Efficiency bonus | {result['efficiency']:.3f} |\n"
-        f"| Questions used | {result['questions']}/{state['max_q']} |\n\n"
+        f"**Score:** `[{bar}]` **{r:.3f}** / 1.000\n\n"
+        f"| Component | Value |\n|-----------|-------|\n"
+        f"| Semantic similarity | `{bd['semantic_similarity']:.3f}` |\n"
+        f"| Efficiency bonus | `{bd['efficiency_bonus']:.3f}` |\n"
+        f"| Category bonus | `{bd['category_bonus']:.3f}` |\n"
+        f"| Keyword bonus | `{bd['keyword_bonus']:.3f}` |\n"
+        f"| Questions used | `{bd['questions_used']}` / `{obs['max_steps']}` |\n\n"
         f"---\n\n"
-        f"**Your hypothesis:** {hypothesis}\n\n"
-        f"**True secret:** _{state['secret']['content']}_"
+        f"**Your hypothesis:** {hypothesis.strip()}\n\n"
+        f"**True secret:** _{true_secret}_"
     )
-    return state, output, ""
+    state = {**state, "done": True}
+    return state, result_md, ""
 
 # ---------------------------------------------------------------------------
-# Build UI
+# 5. UI
 # ---------------------------------------------------------------------------
-with gr.Blocks(title="MindRead — Theory of Mind RL Environment", theme=gr.themes.Soft()) as demo:
+CSS = """
+.score-box { font-family: monospace; }
+footer { display: none !important; }
+"""
+
+with gr.Blocks(title="MindRead — Theory of Mind RL", theme=gr.themes.Soft(), css=CSS) as demo:
     gr.Markdown("""
-# 🕵️ MindRead — Theory of Mind Detective
+# MindRead — Theory of Mind RL Environment
 
 **Can you read between the lines?**
 
-An Oracle holds a hidden secret. They **cannot lie**, but will **never reveal it directly**.
-Ask strategic questions, interpret evasive answers, then submit your hypothesis.
+An **Oracle** holds a hidden secret. They cannot lie — but will never reveal it directly.
+Ask strategic questions, read between the lines, then submit your hypothesis.
 
-*This environment trains AI agents via GRPO to do exactly this — functional Theory of Mind.*
+> This is the same interface RL agents use during GRPO training.
+> The detective (Qwen2.5-1.5B) was trained via TRL + PyTorch to do exactly this —
+> it learned to ask **44% fewer questions** while maintaining hypothesis quality.
+
+_Powered by: PyTorch · TRL GRPO · OpenEnv · sentence-transformers_
 """)
 
     state = gr.State({})
 
     with gr.Row():
-        with gr.Column(scale=1):
-            task_dropdown = gr.Dropdown(
-                choices=list(TASK_DESCRIPTIONS.keys()),
+        with gr.Column(scale=1, min_width=280):
+            task_dd = gr.Dropdown(
+                choices=list(TASK_LABELS.keys()),
                 value="factual_easy",
-                label="Task difficulty",
+                label="Task (difficulty)",
+                info="Higher = harder Theory of Mind reasoning required",
             )
-            start_btn = gr.Button("New Game", variant="primary")
-            context_box = gr.Markdown("_Click 'New Game' to start._", label="Scene")
+            start_btn = gr.Button("New Game", variant="primary", size="lg")
+            scene_box = gr.Markdown("_Click **New Game** to start._", label="Scene & Mission")
+
+            gr.Markdown("---")
+            gr.Markdown("""
+**Scoring formula:**
+```
+reward = semantic_sim × efficiency_bonus
+       + category_bonus + keyword_bonus
+```
+- Fewer questions = higher efficiency bonus
+- Semantic similarity via all-MiniLM-L6-v2 (PyTorch)
+""")
 
         with gr.Column(scale=2):
-            history_box = gr.Markdown("_No conversation yet._", label="Conversation")
+            history_box = gr.Markdown("_Conversation will appear here._", label="Conversation")
 
             with gr.Row():
-                question_input = gr.Textbox(
-                    placeholder="Ask the Oracle a question...",
+                q_input = gr.Textbox(
+                    placeholder="Ask the oracle a strategic question...",
                     label="Your question",
                     scale=4,
-                    interactive=False,
+                    lines=1,
                 )
-                ask_btn = gr.Button("Ask", interactive=False)
+                ask_btn = gr.Button("Ask", size="lg")
 
-            status_label = gr.Markdown("")
+            status_md = gr.Markdown("")
 
-            hypothesis_input = gr.Textbox(
-                placeholder="What's the secret? Be specific...",
-                label="Your hypothesis",
-                lines=2,
-                interactive=False,
-            )
-            submit_btn = gr.Button("Submit Hypothesis", variant="secondary", interactive=False)
-            result_box = gr.Markdown("")
+            gr.Markdown("---")
+            with gr.Row():
+                hyp_input = gr.Textbox(
+                    placeholder="What is the secret? Be specific and precise...",
+                    label="Your hypothesis",
+                    lines=2,
+                    scale=3,
+                )
+                cat_dd = gr.Dropdown(
+                    choices=CATEGORY_CHOICES,
+                    value="factual",
+                    label="Category",
+                    scale=1,
+                    info="What type of secret is it?",
+                )
+            submit_btn = gr.Button("Submit Hypothesis", variant="secondary", size="lg")
+            result_box = gr.Markdown("", elem_classes=["score-box"])
 
     gr.Markdown("""
 ---
-### How scoring works
-`reward = semantic_similarity × efficiency_bonus`
+### How the RL training works
 
-- **Semantic similarity**: how close your hypothesis is to the real secret (sentence embeddings)
-- **Efficiency bonus**: fewer questions = higher bonus (0.6–1.0 range)
-- Reward range: 0.0 – 1.0
+```
+OpenEnv Server (/reset /step /submit)
+        ↕  httpx
+  Detective (Qwen2.5-1.5B-Instruct)
+        ↕  GRPO via TRL (PyTorch)
+  Reward = semantic_similarity × efficiency
+         (sentence-transformers/all-MiniLM-L6-v2)
+```
 
-### About MindRead
-Trained a Qwen2.5-1.5B detective via GRPO (150 steps, Lightning AI A100).
-After training: **44% fewer questions** while maintaining hypothesis quality.
-The model stopped fishing and started thinking.
+**Training result:** After 300 steps on Lightning AI A100/H100 —
+the detective learned to ask **44% fewer questions** while maintaining hypothesis quality.
+The efficiency bonus in the reward function successfully shaped strategic questioning.
 
-[GitHub](https://github.com/shankarpatil8497/mindread-env) | Built for Meta × Scaler PyTorch OpenEnv Hackathon 2026
+**Why Theory of Mind?** Existing ToM benchmarks test static prediction ("will Alice look in box A?").
+MindRead tests *functional* ToM — adapting behavior to infer what someone actually believes
+through live interaction. This is what great detectives, negotiators, and therapists do.
+
+[GitHub](https://github.com/nileshpatil6/MindRead-RL-Environment) · Built for **Meta × Scaler PyTorch OpenEnv Hackathon 2026**
 """)
 
     # Wire events
     start_btn.click(
         start_game,
-        inputs=[task_dropdown, state],
-        outputs=[state, context_box, history_box, question_input, result_box,
-                 question_input, ask_btn, submit_btn],
+        inputs=[task_dd],
+        outputs=[state, scene_box, history_box, result_box, status_md],
     )
-
     ask_btn.click(
         ask_question,
-        inputs=[question_input, state],
-        outputs=[state, history_box, context_box, status_label],
-    ).then(lambda: "", outputs=question_input)
-
-    question_input.submit(
+        inputs=[q_input, state],
+        outputs=[state, history_box, scene_box, status_md],
+    ).then(lambda: "", outputs=q_input)
+    q_input.submit(
         ask_question,
-        inputs=[question_input, state],
-        outputs=[state, history_box, context_box, status_label],
-    ).then(lambda: "", outputs=question_input)
-
+        inputs=[q_input, state],
+        outputs=[state, history_box, scene_box, status_md],
+    ).then(lambda: "", outputs=q_input)
     submit_btn.click(
         submit_hypothesis,
-        inputs=[hypothesis_input, state],
-        outputs=[state, result_box, status_label],
+        inputs=[hyp_input, cat_dd, state],
+        outputs=[state, result_box, status_md],
     )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(server_port=7860)
