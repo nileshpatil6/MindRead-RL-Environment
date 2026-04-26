@@ -4,6 +4,9 @@ from server.models import Secret
 
 _client: Groq | None = None
 
+# Set this to a callable to bypass Groq entirely (used by local-oracle notebooks)
+LOCAL_ORACLE_FN = None
+
 ORACLE_SYSTEM_TEMPLATE = """\
 You are {persona}. You are in a professional context: {context}.
 
@@ -53,6 +56,8 @@ def ask_oracle(
     conversation_history: list[dict],
     question: str,
 ) -> str:
+    if LOCAL_ORACLE_FN is not None:
+        return LOCAL_ORACLE_FN(secret, conversation_history, question)
     client = _get_client()
     system_prompt = build_oracle_system_prompt(secret)
 
