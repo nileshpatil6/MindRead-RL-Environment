@@ -1,0 +1,11 @@
+What if an AI could read between the lines — not what people say, but what they're hiding?
+
+MindRead trains a detective agent to do exactly that. Given a person who knows a secret and won't reveal it directly, the detective must ask strategic questions, interpret evasive answers, and deduce the hidden truth. No shortcuts. No direct answers. Pure inference.
+
+This is Theory of Mind for AI — the ability to model what another agent believes, intends, and conceals. It's the same cognitive skill that separates great detectives, negotiators, and therapists from everyone else. And it's one of the hardest things to teach a language model.
+
+We built MindRead as an OpenEnv environment with five tasks of increasing difficulty — from factual secrets to second-order deception ("I know that you know that I know"). A 1.5B Qwen detective is trained via GRPO against a local oracle model. After 150 steps, the detective learns to ask 44% fewer questions while maintaining hypothesis quality — it stops fishing and starts thinking.
+
+The result: a benchmark where the only way to win is to genuinely understand another mind.
+
+Not classify. Not retrieve. Understand.

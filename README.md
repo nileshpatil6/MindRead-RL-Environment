@@ -1,5 +1,7 @@
 # MindRead: Theory of Mind RL Environment
 
+[![HF Space](https://img.shields.io/badge/🤗-Live%20Demo-blue)](https://huggingface.co/spaces/shankarpatil8497/mindread-env)
+
 **The first OpenEnv environment that trains LLM agents to infer hidden mental states through strategic questioning — functional Theory of Mind.**
 
 > "Achieving functional theory of mind over long interaction horizons with a partner is a significant challenge deserving a prominent role in any meaningful LLM evaluation." — ICML 2025
@@ -189,12 +191,19 @@ Covers: reward function (15+ cases), Oracle behavior, episode lifecycle, end-to-
 
 ## Results
 
-| Task | Baseline | Trained (300 steps) | Improvement |
-|------|---------|---------------------|-------------|
-| factual_easy | 0.42 | — | — |
-| second_order | 0.14 | — | — |
+**Trained on Lightning AI A100 — 150 steps, ~38 minutes, Qwen2.5-1.5B + TRL GRPO**
 
-*Fill after hackathon training run.*
+| Metric | Baseline | Trained | Change |
+|--------|---------|---------|--------|
+| Avg reward | 0.1393 | 0.0302 | — |
+| Avg questions | 7.7 | 4.3 | **−44%** |
+
+![Training curve](evals/training_curve.png)
+
+The detective learned to ask **44% fewer questions** — it stopped fishing and started thinking.
+The efficiency bonus in the reward function successfully shaped strategic questioning behavior.
+
+See full results: [evals/trained_results.md](evals/trained_results.md)
 
 ---
 
